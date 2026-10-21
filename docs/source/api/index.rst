@@ -659,6 +659,50 @@ Behavior
   dtype.
 * During graph export, these become feedback outputs.
 
+``annotate.register_buffer()``
+------------------------------
+
+Declare tensors allocated outside a traced node that the node writes and
+reads, such as accumulators.
+
+Signature
+~~~~~~~~~
+
+.. code-block:: python
+
+   annotate.register_buffer(node_name: str,
+                            tensors: torch.Tensor | list | tuple | dict)
+
+Parameters
+~~~~~~~~~~
+
+* ``node_name`` (str, required): Existing traced node.
+* ``tensors`` (required): A tensor, a list or tuple of tensors, or a dict
+  mapping buffer names to tensors. Names are generated when not given.
+
+Returns
+~~~~~~~
+
+* Traced values backed by the given tensors: a single value for one
+  tensor, otherwise a tuple in input order.
+
+Behavior
+~~~~~~~~
+
+* Work on the returned values inside the node, including in-place
+  resets, is part of the exported model and runs on every call.
+* Without it, a reset of an outside buffer before the node's first use of
+  traced data is not exported, and the exported model accumulates across
+  calls. Validation reports this as a replayed sample that differs.
+* Outside a tracing session, the tensors are returned unchanged.
+
+Notes
+~~~~~
+
+* Call after ``input_tensors()`` on every call of the node.
+* Pass Torch tensors. For a Warp array, register ``wp.to_torch(array)``
+  and use ``wp.from_torch(result, dtype=array.dtype)`` in its place.
+
 ``annotate.module()``
 ---------------------
 
