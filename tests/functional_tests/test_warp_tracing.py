@@ -1142,6 +1142,10 @@ class TestWarpHiddenStateValidation(WarpTestCase, LEAPPFunctionalTestBase):
                 with self.assertRaisesRegex(Exception, "annotate.register_buffer"):
                     leapp.compile_graph(visualize=False)
 
+    def test_replay_check_can_be_disabled(self):
+        self._trace_accumulator("onnx", register=False)
+        leapp.compile_graph(visualize=False, check_replay=False)
+
     def test_registered_accumulator_passes_validation(self):
         for export_with in ("onnx", "pt2"):
             with self.subTest(export_with=export_with):
