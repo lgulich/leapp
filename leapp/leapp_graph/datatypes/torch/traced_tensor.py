@@ -28,6 +28,7 @@ from ..proxy_view import (
     update_view_proxy,
 )
 from ..traced_data import TracedData
+from .traced_size import TracedInt, find_traced_int, plain_sizes, proxy_of
 
 
 # torch dtype object -> common name string. Lives with the torch node library
@@ -80,6 +81,13 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # handled separately because device moves and dtype casts share one method.
     _EQUIVALENT_COPY_NAMES = frozenset({"clone", "detach", "contiguous", "cpu", "cuda"})
     _NATIVE_TYPE = torch.Tensor
+    # Ops whose output size depends on input values. Their results, and every
+    # tensor computed from them, answer size queries with TracedInt so the
+    # exported graph reads those sizes at run time instead of baking them in.
+    _DATA_DEPENDENT_SHAPE_NAMES = frozenset({
+        "nonzero", "argwhere", "masked_select", "unique", "unique_consecutive",
+    })
+    _data_dependent_shape = False
 
     @staticmethod
     def __new__(cls, tensor: torch.Tensor, name: str, context, proxy: Proxy):
@@ -654,6 +662,25 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         """Intercept torch operations to record them in the graph.
 
+        Size queries on tensors with data-dependent shapes are answered with
+        traced sizes; every other call is recorded by ``_record_torch_function``.
+        """
+        if kwargs is None:
+            kwargs = {}
+        sizes = cls._traced_size_query(func, args, kwargs)
+        if sizes is not None:
+            return sizes
+        if find_traced_int((args, tuple(kwargs.values()))) is not None:
+            args, kwargs = plain_sizes(args), plain_sizes(kwargs)
+        result = cls._record_torch_function(func, types, args, kwargs)
+        if cls._makes_data_dependent_shape(func, args, kwargs):
+            cls._mark_data_dependent_shape(result)
+        return result
+
+    @classmethod
+    def _record_torch_function(cls, func, types, args=(), kwargs=None):
+        """Execute ``func`` on the real tensors and record it in the graph.
+
         This method is called by PyTorch whenever a torch function is applied
         to this object. We execute the operation on the real tensor and record
         it in the FX graph.
@@ -789,7 +816,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return receiver._new_alias(tensor_out)
 
         def extract_proxy_leaf(item):
-            if isinstance(item, TracedTensor):
+            if isinstance(item, (TracedTensor, TracedInt)):
                 return item.proxy
             if isinstance(item, torch.nn.Parameter):
                 # Inline parameters as constants for ONNX/JIT freezing.
@@ -837,6 +864,67 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         else:
             # Non-tensor return (e.g., .item(), .tolist())
             return tensor_out
+
+    # =========================================================================
+    # Data-Dependent Shapes
+    # =========================================================================
+
+    @classmethod
+    def _makes_data_dependent_shape(cls, func, args, kwargs) -> bool:
+        """Whether ``func``'s result has a size that depends on input values."""
+        name = getattr(func, "__name__", "")
+        if name in cls._DATA_DEPENDENT_SHAPE_NAMES:
+            return True
+        if name == "where" and len(args) == 1 and not kwargs:
+            return True
+        found = False
+
+        def visit(item):
+            nonlocal found
+            if isinstance(item, TracedInt) or (
+                isinstance(item, TracedTensor) and item._data_dependent_shape
+            ):
+                found = True
+            return item
+
+        TracedData._map_structure((args, kwargs), visit)
+        return found
+
+    @staticmethod
+    def _mark_data_dependent_shape(result):
+        def mark(item):
+            if isinstance(item, TracedTensor):
+                item._data_dependent_shape = True
+            return item
+
+        TracedData._map_structure(result, mark)
+
+    @classmethod
+    def _traced_size_query(cls, func, args, kwargs):
+        """Answer ``shape``/``size()``/``numel()`` with traced sizes, else None."""
+        if not args or not isinstance(args[0], TracedTensor):
+            return None
+        receiver = args[0]
+        if not receiver._data_dependent_shape:
+            return None
+        is_shape = getattr(func, "__self__", None) is torch._C.TensorBase.shape
+        if not (is_shape or func is torch._C.TensorBase.size or func is torch._C.TensorBase.numel):
+            return None
+        if not receiver.validate_status(args[1:], kwargs):
+            return None
+        if func is torch._C.TensorBase.numel:
+            proxy = receiver._context.tracer.create_proxy(
+                "call_method", "numel", (receiver.proxy,), {}
+            )
+            return TracedInt(receiver.tensor.numel(), proxy, receiver._context, receiver)
+        dim = None if is_shape else (args[1] if len(args) > 1 else kwargs.get("dim"))
+        if dim is not None:
+            return receiver._traced_dim(dim)
+        return torch.Size(receiver._traced_dim(d) for d in range(receiver.tensor.dim()))
+
+    def _traced_dim(self, dim: int) -> TracedInt:
+        proxy = self._context.tracer.create_proxy("call_method", "size", (self.proxy, dim), {})
+        return TracedInt(self.tensor.shape[dim], proxy, self._context, self)
 
     # =========================================================================
     # Attribute Access
@@ -1208,6 +1296,29 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # =========================================================================
 
     def __getitem__(self, key):
+        """Indexing operator; see ``_traced_getitem``.
+
+        Boolean masks, data-dependent operands, and traced sizes in the key
+        give a result whose size depends on input values.
+        """
+        result = self._traced_getitem(key)
+        dependent = self._data_dependent_shape
+
+        def visit(item):
+            nonlocal dependent
+            if isinstance(item, TracedInt) or (
+                isinstance(item, TracedTensor)
+                and (item._data_dependent_shape or item.tensor.dtype == torch.bool)
+            ):
+                dependent = True
+            return item
+
+        TracedData._map_structure(key, visit)
+        if dependent:
+            self._mark_data_dependent_shape(result)
+        return result
+
+    def _traced_getitem(self, key):
         """Indexing operator for TracedTensor.
 
         Supports all Python indexing operations: slicing, integer indexing,
@@ -1281,7 +1392,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return self._new_alias(result_tensor)
 
         proxy_out = self._context.tracer.create_proxy(
-            "call_function", operator.getitem, (self.proxy, key), {}
+            "call_function",
+            operator.getitem,
+            (self.proxy, TracedData._map_structure(plain_sizes(key), proxy_of)),
+            {},
         )
         if isinstance(result_tensor, torch.Tensor):
             return self._new(result_tensor, proxy_out)

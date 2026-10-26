@@ -57,6 +57,19 @@ class TorchPatchBackend:
         @functools.wraps(original_func)
         def patched(data, *args, **kwargs):
             from leapp.leapp_graph.datatypes import as_traced, is_traced_type
+            from .traced_size import find_traced_int, record_tensor_from_sizes
+
+            # A tensor built from data-dependent sizes, e.g. torch.tensor(x.shape),
+            # must read them at run time, so the call itself is recorded.
+            size = find_traced_int(data)
+            if size is not None and size._owner.validate_status():
+                result = original_func(data, *args, **kwargs)
+                proxy = record_tensor_from_sizes(
+                    size._context.tracer, data, result.dtype, result.device
+                )
+                traced = size._owner._new(result, proxy)
+                traced._data_dependent_shape = True
+                return traced
 
             is_traced = is_traced_type(data)
 
