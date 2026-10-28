@@ -56,20 +56,33 @@ class TorchPatchBackend:
 
         @functools.wraps(original_func)
         def patched(data, *args, **kwargs):
-            from leapp.leapp_graph.datatypes import as_traced, is_traced_type
-            from .traced_size import find_traced_int, record_tensor_from_sizes
+            from leapp.leapp_graph.datatypes import (
+                TracedData,
+                TracedInt,
+                TracedTensor,
+                as_traced,
+                is_traced_type,
+            )
+            from leapp.leapp_graph.datatypes.primitives.traced_int import (
+                find_recording_int,
+            )
 
-            # A tensor built from data-dependent sizes, e.g. torch.tensor(x.shape),
+            # A tensor built from traced integers, e.g. torch.tensor(x.shape),
             # must read them at run time, so the call itself is recorded.
-            size = find_traced_int(data)
-            if size is not None and size._owner.validate_status():
+            size = find_recording_int(data)
+            if size is not None and size.validate_status((data,)):
                 result = original_func(data, *args, **kwargs)
-                proxy = record_tensor_from_sizes(
-                    size._context.tracer, data, result.dtype, result.device
+                proxy = _record_tensor_from_ints(
+                    size.context_obj.tracer, data, result.dtype, result.device
                 )
-                traced = size._owner._new(result, proxy)
+                traced = TracedTensor(
+                    result, TracedData._name_from_proxy(proxy), size.context_obj, proxy
+                )
                 traced._data_dependent_shape = True
                 return traced
+            if isinstance(data, TracedInt):
+                # An integer that no longer records is a plain value.
+                data = int(data)
 
             is_traced = is_traced_type(data)
 
@@ -96,3 +109,23 @@ class TorchPatchBackend:
             return result
 
         return patched
+
+
+def _record_tensor_from_ints(tracer, data, dtype, device):
+    """Record ``torch.tensor(data)`` for nested traced integers.
+
+    Exporters that trace the FX graph (TorchScript) keep ``torch.tensor`` of
+    traced integers as a constant, but they do trace ``scalar_tensor`` and
+    ``stack``; the tensor is rebuilt from those.
+    """
+    from leapp.leapp_graph.datatypes.primitives.traced_int import graph_value
+
+    if isinstance(data, (list, tuple)):
+        items = [_record_tensor_from_ints(tracer, item, dtype, device) for item in data]
+        return tracer.create_proxy("call_function", torch.stack, (items,), {})
+    return tracer.create_proxy(
+        "call_function",
+        torch.scalar_tensor,
+        (graph_value(data),),
+        {"dtype": dtype, "device": device},
+    )

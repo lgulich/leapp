@@ -17,10 +17,8 @@ import torch
 import leapp
 from leapp import InferenceManager, TensorSemantics
 from leapp.leapp import _MANAGER as annotate
-from leapp.leapp_graph.datatypes.torch.traced_size import TracedInt
-
+from leapp.leapp_graph.datatypes import TracedInt
 from tests.functional_tests.base import LEAPPFunctionalTestBase
-
 
 # Two positives, then three: the traced count differs between samples.
 SAMPLES = [torch.tensor([[1.0, -1.0, 2.0]]), torch.tensor([[1.0, 3.0, 2.0]])]
@@ -67,7 +65,9 @@ class TestDataDependentShapes(LEAPPFunctionalTestBase):
         # Validation replays every cached sample, so a baked count fails here.
         leapp.compile_graph(visualize=False, validate=True, strict=True)
 
-        manager = InferenceManager(f"{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml")
+        manager = InferenceManager(
+            f"{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml"
+        )
         for value in (*SAMPLES, UNSEEN):
             actual = torch.as_tensor(manager.run_policy({"node/x": value})["node/y"])
             torch.testing.assert_close(actual.float(), fn(value).float())
