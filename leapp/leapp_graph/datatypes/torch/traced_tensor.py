@@ -685,8 +685,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         sizes = cls._traced_size_query(func, args, kwargs)
         if sizes is not None:
             return sizes
-        if _contains_traced_int((args, kwargs)):
-            args, kwargs = _graph_sizes(args), _graph_sizes(kwargs)
+        args, kwargs = _graph_sizes(args), _graph_sizes(kwargs)
         result = cls._record_torch_function(func, types, args, kwargs)
         if cls._makes_data_dependent_shape(func, args, kwargs):
             cls._mark_data_dependent_shape(result)

@@ -143,9 +143,6 @@ class TracedInt(int, TracedData):
     def __str__(self) -> str:
         return str(int(self))
 
-    def __format__(self, format_spec: str) -> str:
-        return int(self).__format__(format_spec)
-
 
 # YAML looks representers up by exact type, so a TracedInt would otherwise be
 # rejected by ``safe_dump`` and written as a Python object by ``dump``.
