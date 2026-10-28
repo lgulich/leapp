@@ -42,8 +42,7 @@ model keeps adding to the previous call's result. Declare the buffer with
 ``annotate.register_buffer()``, or allocate it inside the node. Declare
 state that should carry over between calls, such as a warm start or a filter
 value, with ``annotate.state_tensors()`` and ``annotate.update_state()``
-so it becomes an explicit model input and output. ``compile_graph(check_replay=False)`` skips only this
-check.
+so it becomes an explicit model input and output.
 
 .. code-block:: python
 

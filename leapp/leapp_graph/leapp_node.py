@@ -37,8 +37,7 @@ _HIDDEN_STATE_HINT = (
     "with zero_() and written with wp.atomic_add. Declare such buffers with "
     "annotate.register_buffer() for this node, or allocate them inside the node. "
     "Declare state that should carry over between calls with "
-    "annotate.state_tensors() and annotate.update_state(). To skip this check, "
-    "pass check_replay=False to leapp.compile_graph()."
+    "annotate.state_tensors() and annotate.update_state()."
 )
 
 
@@ -613,7 +612,7 @@ class LeappNode:
         return matched
 
     def validate_compiled_model(
-        self, rtol: float = 1e-3, atol: float = 1e-5, check_replay: bool = True
+        self, rtol: float = 1e-3, atol: float = 1e-5
     ) -> tuple[bool, str | None]:
         if self.compiled_model is None:
             _get_logger().warning(
@@ -639,7 +638,7 @@ class LeappNode:
 
         # Replay the first sample with declared buffers restored. A different
         # result means the export kept undeclared state from the earlier calls.
-        if check_replay and sample_passed[0]:
+        if sample_passed[0]:
             with torch.no_grad():
                 for name, buffer in buffers.items():
                     buffer.copy_(initial_buffers[name])

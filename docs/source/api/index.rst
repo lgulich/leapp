@@ -188,7 +188,6 @@ Signature
        atol: float = 1e-5,
        strict: bool = True,
        graph_configs: GraphConfigs | None = None,
-       check_replay: bool = True,
    )
 
 Parameters
@@ -203,7 +202,9 @@ Parameters
 * ``validate`` (bool, optional): Validate exported models against all cached
   input/output samples, including exported state updates. Each sample uses
   its recorded inputs and state; see :ref:`stateful-validation` for the
-  distinction from sequential runtime replay. Defaults to ``True``.
+  distinction from sequential runtime replay. Validation then runs sample 0
+  again and fails if the result differs, which means the export keeps
+  undeclared state between calls. Defaults to ``True``.
 * ``rtol`` (float, optional): Relative tolerance for
   ``torch.allclose()``. Defaults to ``1e-3``.
 * ``atol`` (float, optional): Absolute tolerance for
@@ -212,9 +213,6 @@ Parameters
   to ``True``.
 * ``graph_configs`` (GraphConfigs, optional): Graph-level metadata to serialize
   under the generated YAML ``pipeline.configs`` entry.
-* ``check_replay`` (bool, optional): After the cached samples, run sample 0
-  again and fail if the result differs, which means the export keeps
-  undeclared state between calls. Defaults to ``True``.
 
 Behavior
 ~~~~~~~~
