@@ -96,6 +96,21 @@ Re-entry also checks names, shapes, dtypes, and connectivity against
 the first step. Those failures show up during tracing, not at
 ``compile_graph()``.
 
+Data-dependent shapes
+---------------------
+
+``torch.nonzero``, boolean masks such as ``x[x > 0]``, ``masked_select``
+and ``torch.unique`` return tensors whose size depends on the input
+values. LEAPP keeps reads of such sizes symbolic: ``.shape``,
+``.size()``, ``.numel()``, integer arithmetic on them, and
+``torch.tensor(x.shape)`` are recorded in the graph, so the export
+computes them at run time.
+
+``len(x)`` and Python ``float`` arithmetic on sizes always produce plain
+numbers and are inlined as constants. Use ``x.size(0)`` or
+``x.shape[0]`` instead of ``len(x)``. Include samples with different
+counts, so validation would catch an inlined size.
+
 .. _stateful-validation:
 
 Stateful transitions and sequential replay
